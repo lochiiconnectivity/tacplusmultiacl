@@ -1,0 +1,346 @@
+diff -crb tacacs+-F4.0.4.14-old/author.c tacacs+-F4.0.4.14-new/author.c
+*** tacacs+-F4.0.4.14-old/author.c	2006-12-13 16:42:56.000000000 +0000
+--- tacacs+-F4.0.4.14-new/author.c	2009-03-03 16:53:55.000000000 +0000
+***************
+*** 124,131 ****
+  
+  #ifdef ACLS
+      authen_data.NAS_id = &identity;
+!     if (verify_host(author_data.id->username,
+! 			&authen_data, S_acl, TAC_PLUS_RECURSE) != S_permit) {
+  	author_data.status = AUTHOR_STATUS_FAIL;
+      } else
+  #endif
+--- 124,133 ----
+  
+  #ifdef ACLS
+      authen_data.NAS_id = &identity;
+!     if ((verify_host(author_data.id->username,
+! 			&authen_data, S_acl, TAC_PLUS_RECURSE) != S_permit) &&
+!         (verify_host(author_data.id->username,
+! 		     	&authen_data, S_acl2, TAC_PLUS_RECURSE) != S_permit)) {
+  	author_data.status = AUTHOR_STATUS_FAIL;
+      } else
+  #endif
+diff -crb tacacs+-F4.0.4.14-old/config.c tacacs+-F4.0.4.14-new/config.c
+*** tacacs+-F4.0.4.14-old/config.c	2006-12-13 16:42:56.000000000 +0000
+--- tacacs+-F4.0.4.14-new/config.c	2009-03-03 16:53:55.000000000 +0000
+***************
+*** 152,160 ****
+--- 152,162 ----
+      int nopasswd;		/* user requires no password */
+  #ifdef ACLS
+      char *acl;			/* hosts (NASs) to allow / deny ACL */
++     char *acl2;			/* hosts (NASs) to allow / deny ACL2 */
+  # ifdef UENABLE
+      char *enable;		/* users enable pwd */
+      char *enableacl;		/* hosts (NASs) to allow/deny enabling */
++     char *enableacl2;		/* hosts (NASs) to allow/deny enabling 2 */
+  # endif
+  #endif
+      char *global;		/* password to use if none set */
+***************
+*** 459,469 ****
+--- 461,475 ----
+  #ifdef ACLS
+      if (user->acl)
+  	free(user->acl);
++     if (user->acl2)
++ 	free(user->acl2);
+  # ifdef UENABLE
+      if (user->enable)
+  	free(user->enable);
+      if (user->enableacl)
+  	free(user->enableacl);
++     if (user->enableacl2)
++ 	free(user->enableacl2);
+  # endif
+  #endif
+      if (user->expires)
+***************
+*** 1142,1147 ****
+--- 1148,1157 ----
+  	    ASSIGN(user->acl);
+  	    sym_get();
+  	    continue;
++         case S_acl2:
++             ASSIGN(user->acl2);
++             sym_get();
++             continue;
+  
+  # ifdef UENABLE
+  	case S_enable:
+***************
+*** 1180,1185 ****
+--- 1190,1199 ----
+  	    ASSIGN(user->enableacl);
+  	    sym_get();
+  	    continue;
++         case S_enableacl2:
++             ASSIGN(user->enableacl2);
++             sym_get();
++             continue;
+  # endif
+  #endif
+  
+***************
+*** 1634,1639 ****
+--- 1648,1656 ----
+      case S_acl:
+  	v.pval = user->acl;
+  	break;
++     case S_acl2:
++         v.pval = user->acl2;
++         break;
+  # ifdef UENABLE
+      case S_enable:
+  	v.pval = user->enable;
+***************
+*** 1641,1646 ****
+--- 1658,1666 ----
+      case S_enableacl:
+  	v.pval = user->enableacl;
+  	break;
++     case S_enableacl2:
++ 	v.pval = user->enableacl2;
++ 	break;
+  # endif
+  #endif
+  
+diff -crb tacacs+-F4.0.4.14-old/default_fn.c tacacs+-F4.0.4.14-new/default_fn.c
+*** tacacs+-F4.0.4.14-old/default_fn.c	2006-12-13 16:42:56.000000000 +0000
+--- tacacs+-F4.0.4.14-new/default_fn.c	2009-10-09 17:46:32.000000000 +0100
+***************
+*** 230,236 ****
+  #if HAVE_PAM
+      char	*cfg_passwd;
+  #endif
+!     char	*name, *passwd;
+      int		pwlen;
+  
+      name = data->NAS_id->username;
+--- 230,236 ----
+  #if HAVE_PAM
+      char	*cfg_passwd;
+  #endif
+!     char	*name, *passwd, *val;
+      int		pwlen;
+  
+      name = data->NAS_id->username;
+***************
+*** 293,302 ****
+  
+      /* Assume the worst */
+      data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+!     verify(name, passwd, data, TAC_PLUS_RECURSE);
+  #ifdef ACLS
+!     if (verify_host(name, data, S_acl, TAC_PLUS_RECURSE) != S_permit)
+  	data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+  #endif
+      return;
+  }
+--- 293,346 ----
+  
+      /* Assume the worst */
+      data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+!     if (!verify(name, passwd, data, TAC_PLUS_RECURSE))
+! 	    return;
+  #ifdef ACLS
+!     /* Check ACLs */
+!     /* Again, start by assuming the worst */
+!     data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+!     /* Next, see if a primary ACL for the user exists */
+!     val = cfg_get_pvalue(name, 1, S_acl, TAC_PLUS_RECURSE);
+!     if (val == NULL) {
+! 	    /* If it does not exist, allow user through */
+! 	    data->status = TAC_PLUS_AUTHEN_STATUS_PASS;
+! 	    return;
+!     }
+!     else {
+! 	    /* If it does exist on the other hand, check it */
+! 	    if (verify_host(name, data, S_acl, TAC_PLUS_RECURSE) == S_permit) {
+! 		    report(LOG_ERR, "Primary ACL defined and was matched by this user");
+! 		    data->status = TAC_PLUS_AUTHEN_STATUS_PASS;
+! 		    return;
+! 	    }
+! 	    else {
+! 		    /* If user did not appear in it, move on to checking the secondary ACL, if it exists */
+! 		    report(LOG_ERR, "Primary ACL defined and was not matched by this user");
+! 		    
+! 		    val = cfg_get_pvalue(name, 1, S_acl2, TAC_PLUS_RECURSE);
+! 
+! 		    if (val == NULL) {
+! 			    report(LOG_ERR, "Secondary ACL is also not defined, we can not let user continue");
+  			    data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
++ 			    return;
++ 		    }	
++ 		    else {
++ 			   if (verify_host(name, data, S_acl2, TAC_PLUS_RECURSE) == S_permit) { 
++ 	    		   	report(LOG_ERR, "Secondary ACL defined and was matched by this user");
++ 				data->status = TAC_PLUS_AUTHEN_STATUS_PASS;
++ 				return;
++ 			   }
++ 			   else {
++ 				report(LOG_ERR, "Secondary ACL defined and was not matched by this user");
++ 			   	data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
++ 				return;
++ 			   }	
++ 	           }
++            }
++     }
++ 				   
++     report(LOG_ERR, "Neither primary nor secondary ACLs were matched by this user");
++ 
+  #endif
+      return;
+  }
+***************
+*** 799,806 ****
+  		   "'%s'", DEFAULT_USERNAME, name);
+  	}
+  	val = cfg_get_pvalue(DEFAULT_USERNAME, 1, type, recurse);
+!     } else
+  	val = cfg_get_pvalue(name, 1, type, recurse);
+  
+      /* no host acl for user */
+      if (val == NULL)
+--- 843,851 ----
+  		   "'%s'", DEFAULT_USERNAME, name);
+  	}
+  	val = cfg_get_pvalue(DEFAULT_USERNAME, 1, type, recurse);
+!     } else {
+  	val = cfg_get_pvalue(name, 1, type, recurse);
++     }
+  
+      /* no host acl for user */
+      if (val == NULL)
+diff -crb tacacs+-F4.0.4.14-old/enable.c tacacs+-F4.0.4.14-new/enable.c
+*** tacacs+-F4.0.4.14-old/enable.c	2006-12-13 00:43:08.000000000 +0000
+--- tacacs+-F4.0.4.14-new/enable.c	2009-03-03 16:53:55.000000000 +0000
+***************
+*** 182,192 ****
+      data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+  
+  #ifdef UENABLE
+!     /* check enableacl */
+!     if (verify_host(data->NAS_id->username, data, S_enableacl,
+! 		    TAC_PLUS_RECURSE) != S_permit) {
+! 	data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+!     } else {
+  #endif
+  
+      switch (data->service) {
+--- 182,206 ----
+      data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;
+  
+  #ifdef UENABLE
+!     /* check enableacl and enableacl2*/
+!     if (S_enableacl) {											/* firstly, do we have primary enableacl? */
+! 	    if (verify_host(data->NAS_id->username, data, S_enableacl,TAC_PLUS_RECURSE) != S_permit) {  /* Does it reject the user? */
+! 	    	    report(LOG_ERR, "Primary Enable ACL defined but not matched for this user");	/* Log it */
+! 		    data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;						/* Reject the user */
+! 	    }
+! 	    else {
+!     	    	    data->status = TAC_PLUS_AUTHEN_STATUS_PASS;						/* Accept the User */
+! 	    }
+!     } 
+!     else if (S_enableacl2) {	   									/* Secondly, is a secondary enableacl present? */
+! 	    if (verify_host(data->NAS_id->username, data, S_enableacl2,TAC_PLUS_RECURSE) != S_permit) { /* Does it reject the user? */
+! 	    	    report(LOG_ERR, "Secondary Enable ACL defined but not matched for this user");	/* Log it */
+! 		    data->status = TAC_PLUS_AUTHEN_STATUS_FAIL;						/* Reject the user */
+! 	    }
+! 	    else {
+!     	    	    data->status = TAC_PLUS_AUTHEN_STATUS_PASS;						/* Accept the User */
+! 	    }
+!     }
+  #endif
+  
+      switch (data->service) {
+***************
+*** 211,223 ****
+  	break;
+      }
+  #ifdef UENABLE
+-     }
+  #endif
+  
+      if (data->method_data)
+  	free(data->method_data);
+      data->method_data = NULL;
+  
+      switch (data->status) {
+      case TAC_PLUS_AUTHEN_STATUS_ERROR:
+      case TAC_PLUS_AUTHEN_STATUS_FAIL:
+--- 225,238 ----
+  	break;
+      }
+  #ifdef UENABLE
+  #endif
+  
+      if (data->method_data)
+  	free(data->method_data);
+      data->method_data = NULL;
+  
++     report(LOG_ERR, "MOULIN: data->status is %d, TAC_PLUS_AUTHEN_STATUS_PASS is %d", data->status, TAC_PLUS_AUTHEN_STATUS_PASS);
++ 
+      switch (data->status) {
+      case TAC_PLUS_AUTHEN_STATUS_ERROR:
+      case TAC_PLUS_AUTHEN_STATUS_FAIL:
+diff -crb tacacs+-F4.0.4.14-old/parse.c tacacs+-F4.0.4.14-new/parse.c
+*** tacacs+-F4.0.4.14-old/parse.c	2006-12-13 16:42:57.000000000 +0000
+--- tacacs+-F4.0.4.14-new/parse.c	2009-03-03 16:53:55.000000000 +0000
+***************
+*** 62,67 ****
+--- 62,68 ----
+      declare("accounting", S_accounting);
+  #ifdef ACLS
+      declare("acl", S_acl);
++     declare("acl2", S_acl2);
+  #endif
+      declare("after", S_after);
+      declare("arap", S_arap);
+***************
+*** 82,87 ****
+--- 83,89 ----
+      declare("enable", S_enable);
+  #ifdef UENABLE
+      declare("enableacl", S_enableacl);
++     declare("enableacl2", S_enableacl2);
+  #endif
+      declare("exec", S_exec);
+      declare("expires", S_expires);
+***************
+*** 151,162 ****
+--- 153,168 ----
+  #ifdef ACLS
+      case S_acl:
+  	return("acl");
++     case S_acl2:
++ 	return("acl2");
+  #endif
+      case S_enable:
+  	return("enable");
+  #ifdef UENABLE
+      case S_enableacl:
+  	return("enableacl");
++     case S_enableacl2:
++ 	return("enableacl2");
+  #endif
+      case S_key:
+  	return("key");
+diff -crb tacacs+-F4.0.4.14-old/parse.h tacacs+-F4.0.4.14-new/parse.h
+*** tacacs+-F4.0.4.14-old/parse.h	2006-07-05 20:00:13.000000000 +0100
+--- tacacs+-F4.0.4.14-new/parse.h	2009-03-03 16:53:54.000000000 +0000
+***************
+*** 77,84 ****
+--- 77,86 ----
+  #define S_enable	43
+  #ifdef ACLS
+  # define S_acl		44
++ # define S_acl2		50
+  # ifdef UENABLE
+  #  define S_enableacl	45
++ #  define S_enableacl2	51
+  # endif
+  #endif
+  #define S_prompt	47
